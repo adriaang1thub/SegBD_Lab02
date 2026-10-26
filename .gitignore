@@ -1,0 +1,6 @@
+.env
+certs/*
+!certs/.gitkeep
+backups/*
+!backups/.gitkeep
+__pycache__/

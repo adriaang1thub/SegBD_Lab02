@@ -1,0 +1,143 @@
+# =====================================================================
+#  ENTORNO ENDURECIDO
+#  - Ninguna BD publica puertos: red interna "backend" (internal: true, subred fija)
+#  - PostgreSQL: scram-sha-256, pg_hba sin trust, TLS obligatorio para la app, pgaudit,
+#    log de conexiones y de consultas lentas; superusuario solo por socket local
+#  - MySQL: root solo en localhost, usuario de app con permisos por columna y REQUIRE SSL,
+#    require_secure_transport, general log y slow log
+#  - App sin privilegios (uid 10001, read_only, cap_drop ALL)
+#  Secretos en .env (scripts/gen_secrets.sh), certificados en certs/ (scripts/gen_certs.sh)
+# =====================================================================
+name: segbd2-secure
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.10.0/24
+
+volumes:
+  pg_data: {}
+  my_data: {}
+  my_logs: {}
+
+services:
+  postgres:
+    build: ./docker/postgres
+    image: segbd2/postgres-pgaudit:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: tienda
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      PG_BACKUP_PASSWORD: ${PG_BACKUP_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/certs/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/certs/server.key
+      - -c
+      - ssl_ca_file=/var/lib/postgresql/certs/ca.crt
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - shared_preload_libraries=pgaudit
+      - -c
+      - pgaudit.log=read,write,ddl,role
+      - -c
+      - pgaudit.log_relation=on
+      - -c
+      - pgaudit.log_parameter=off
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - "log_line_prefix=%m [%p] user=%u db=%d host=%r "
+    volumes:
+      - ./sql/init_postgres_secure.sh:/docker-entrypoint-initdb.d/10_init.sh:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./certs:/certs-src:ro
+      - ./backups:/backups
+      - pg_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8
+    entrypoint: ["bash", "/usr/local/bin/entry.sh"]
+    command:
+      - mysqld
+      - --require-secure-transport=ON
+      - --ssl-ca=/etc/mysql-certs/ca.crt
+      - --ssl-cert=/etc/mysql-certs/server.crt
+      - --ssl-key=/etc/mysql-certs/server.key
+      - --tls-version=TLSv1.2,TLSv1.3
+      - --general-log=ON
+      - --general-log-file=/var/log/mysql/general.log
+      - --slow-query-log=ON
+      - --slow-query-log-file=/var/log/mysql/slow.log
+      - --long-query-time=1
+      - --log-output=FILE
+      - --local-infile=OFF
+      - --skip-name-resolve
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_HOST: localhost
+      MYSQL_DATABASE: tienda
+      MY_APP_PASSWORD: ${MY_APP_PASSWORD}
+      MY_BACKUP_PASSWORD: ${MY_BACKUP_PASSWORD}
+    volumes:
+      - ./docker/mysql/entry.sh:/usr/local/bin/entry.sh:ro
+      - ./sql/init_mysql_secure.sql:/docker-entrypoint-initdb.d/10_schema.sql:ro
+      - ./sql/init_mysql_users.sh:/docker-entrypoint-initdb.d/20_users.sh:ro
+      - ./certs:/certs-src:ro
+      - ./backups:/backups
+      - my_data:/var/lib/mysql
+      - my_logs:/var/log/mysql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--protocol=tcp", "--silent"]
+      interval: 5s
+      retries: 40
+
+  app:
+    build: ./app
+    image: segbd2/app
+    command: ["sleep", "infinity"]
+    init: true
+    user: "10001"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PG_HOST: postgres
+      MY_HOST: mysql
+      PG_APP_USER: appuser
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      MY_APP_USER: app
+      MY_APP_PASSWORD: ${MY_APP_PASSWORD}
+      PGCRYPTO_KEY: ${PGCRYPTO_KEY}
+      TLS_CA_FILE: /certs/ca.crt
+    volumes:
+      - ./app:/app:ro
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+      mysql: { condition: service_healthy }

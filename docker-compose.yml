@@ -1,0 +1,49 @@
+# =====================================================================
+#  BASELINE INSEGURO (SOLO LABORATORIO)
+#  - PostgreSQL con autenticación "trust" y puerto 5432 publicado
+#  - MySQL con root sin contraseña y puerto 3306 publicado
+#  - App Python (vulnerable.py) que concatena SQL y usa superusuarios
+# =====================================================================
+name: segbd2-baseline
+
+services:
+  postgres:
+    image: postgres:15
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust      # INSEGURO
+      POSTGRES_DB: tienda
+    volumes:
+      - ./sql/init_postgres.sql:/docker-entrypoint-initdb.d/init_postgres.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 5s
+      retries: 20
+
+  mysql:
+    image: mysql:8
+    ports: ["3306:3306"]
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"     # INSEGURO
+      MYSQL_DATABASE: tienda
+    volumes:
+      - ./sql/init_mysql.sql:/docker-entrypoint-initdb.d/init_mysql.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--protocol=tcp", "-uroot", "--silent"]
+      interval: 5s
+      retries: 30
+
+  app:
+    build: ./app
+    command: ["sleep", "infinity"]
+    init: true
+    environment:
+      PG_HOST: postgres
+      MY_HOST: mysql
+    volumes:
+      - ./app:/app:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      mysql: { condition: service_healthy }
