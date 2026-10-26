@@ -1,7 +1,6 @@
 # SegBD_Lab02 · Hardening de PostgreSQL y MySQL con Python
 
-Laboratorio de la Actividad 2 de *Seguridad en Bases de Datos, Blockchain y Big Data* (UNIR).
-Autor: Adrián Vilella Navarro.
+Laboratorio de la Actividad 3 (segunda actividad individual) de *Seguridad en Bases de Datos, Blockchain y Big Data* (UNIR).
 
 > El baseline es **deliberadamente inseguro**. Úsalo solo en una máquina de laboratorio aislada.
 
